@@ -14,16 +14,16 @@ describe('AppComponent', () => {
     expect(app).toBeTruthy();
   });
 
-  it(`should have the 'angular-cluster' title`, () => {
+  it(`should have the 'FrontendSolutionFront1' title`, () => {
     const fixture = TestBed.createComponent(AppComponent);
     const app = fixture.componentInstance;
-    expect(app.title).toEqual('angular-cluster');
+    expect(app.title).toEqual('FrontendSolutionFront1');
   });
 
   it('should render title', () => {
     const fixture = TestBed.createComponent(AppComponent);
     fixture.detectChanges();
     const compiled = fixture.nativeElement as HTMLElement;
-    expect(compiled.querySelector('h1')?.textContent).toContain('Hello, angular-cluster');
+    expect(compiled.querySelector('h1')?.textContent).toContain('Hello, FrontendSolutionFront1');
   });
 });

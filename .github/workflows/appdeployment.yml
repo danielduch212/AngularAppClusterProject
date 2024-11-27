@@ -1,0 +1,213 @@
+name: App CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x, 22.x]
+    steps:
+    
+    - uses: actions/checkout@v4
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+        
+    - name: install dependencies
+      run: npm install
+
+    # Create api gateway to pass api uri variable to environment.ts
+    
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+    - name: check AWS OACs
+      run: aws cloudfront list-origin-access-controls 
+      
+    - name: Create Api Gateway
+      run: |
+        API_ID=$(aws apigatewayv2 create-api \
+          --name "Api-${{ github.sha }}" \
+          --protocol-type HTTP \
+          --query 'ApiId' --output text)
+        echo "API_ID=$API_ID" >> $GITHUB_ENV
+        echo "API Gateway URL: https://${API_ID}.execute-api.${{ secrets.AWS_REGION }}.amazonaws.com/prod"
+        echo "API_GATEWAY_URL=https://${API_ID}.execute-api.${{ secrets.AWS_REGION }}.amazonaws.com/prod" >> $GITHUB_ENV
+    
+    #change api uri variable
+    - name: Update Api Uri in Angular Frontend Environment
+      run: |
+        sed -i "s|apiUrl: '.*'|apiUrl: '${{ env.API_GATEWAY_URL }}'|" src/environments/environment.ts
+        cat src/environments/environment.ts
+    
+    - name: Build Angular app
+      run: npm run build --prod
+      
+    - name: Upload Frontend Artifacts
+      uses: actions/upload-artifact@v3
+      with: 
+        name: Frontend Artifacts
+        path: ./dist
+
+    - name: Show Build Artifacts
+      run: ls -R ./dist
+
+    #Save Api ID as output
+    - name: Set Api ID as output
+      id: set-api-id
+      run: echo "::set-output name=api_id::${{ env.API_ID }}"
+
+    outputs:
+      api_id: ${{ steps.set-api-id.outputs.api_id }}
+      
+  
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps: 
+      - uses: actions/checkout@v4
+
+      #download outputs
+      - name: Download Api_ID from outputs build
+        run: echo "API_ID=${{ needs.build.outputs.api_id }}" >> $GITHUB_ENV
+      
+      # Download artifacts
+      - name: Download Frontend Artifacts
+        uses: actions/download-artifact@v3
+        with: 
+          name: Frontend Artifacts
+          path: ./dist
+          
+      #AWS Credentials and uploading
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with: 
+          aws-access-key-id: ${{secrets.AWS_ACCESS_KEY}}
+          aws-secret-access-key: ${{secrets.AWS_SECRET_ACCESS_KEY}}
+          aws-region: ${{secrets.AWS_REGION}}
+          
+          
+      - name: Download Backend Artifacts
+        run: aws s3 cp ${{secrets.AWS_S3_BACKEND_PATH}} ./backend/ --recursive
+        
+      - name: Upload hashed backend and frontend to S3
+        run: |
+          aws s3 cp ./dist s3://frontendsolutionbucket/${{ github.sha }}/frontend/ --recursive
+          aws s3 cp ./backend s3://frontendsolutionbucket/${{ github.sha }}/backend/ --recursive
+   
+      # Create CloudFront distribution
+      - name: Create CloudFront Distribution
+        run: |
+          DISTRIBUTION_ID=$(aws cloudfront create-distribution \
+            --distribution-config '{
+              "CallerReference": "${{ github.sha }}",
+              "Comment": "Automated deployment for version ${{ github.sha }}",
+              "Origins": {
+                "Items": [
+                  {
+                    "Id": "S3-frontendsolutionbucket",
+                    "DomainName": "frontendsolutionbucket.s3.amazonaws.com",
+                    "S3OriginConfig": {
+                      "OriginAccessIdentity": ""
+                      
+                    }
+                  }
+                ],
+                "Quantity": 1
+              },
+              "DefaultCacheBehavior": {
+                "TargetOriginId": "S3-frontendsolutionbucket",
+                "ViewerProtocolPolicy": "redirect-to-https",
+                "AllowedMethods": {
+                  "Items": ["GET", "HEAD"],
+                  "Quantity": 2
+                },
+                "CachePolicyId": "d96ead7e-e388-403e-a904-5871a20c36b5" 
+              },
+              "Enabled": true,
+              "DefaultRootObject": "${{ github.sha }}/frontend/frontend-solution-front1/browser/index.html"
+            }' \
+            --query 'Distribution.Id' --output text)
+          echo "CloudFront Distribution ID: $DISTRIBUTION_ID"
+        
+      #Create Lambda AspNet Core Server 
+      - name: Create Lambda
+        run: |
+          aws lambda create-function \
+            --function-name lambda-${{ github.sha }} \
+            --zip-file fileb://./backend/app-deployment-package.zip \
+            --handler FrontendSolutionLogic1::FrontendSolutionLogic1.LambdaEntryPoint::FunctionHandlerAsync \
+            --runtime dotnet8 \
+            --role arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/lambda-execution-role
+
+      #Test
+      - name: Show Api Id
+        run: echo "${API_ID}" 
+
+      #Create Api Gateway integration with lambda
+      - name: Create Api Gateway Integration 
+        run: |
+          INTEGRATION_ID=$(aws apigatewayv2 create-integration \
+            --api-id $API_ID \
+            --integration-type AWS_PROXY \
+            --integration-uri arn:aws:lambda:${{ secrets.AWS_REGION }}:${{ secrets.AWS_ACCOUNT_ID }}:function:lambda-${{ github.sha }} \
+            --payload-format-version "2.0" \
+            --query 'IntegrationId' --output text)          
+          echo "INTEGRATION_ID=$INTEGRATION_ID" >> $GITHUB_ENV     
+        
+      #Create Api Gateway Route
+      - name: Create Api Gateway Route
+        run: |
+          aws apigatewayv2 create-route \
+            --api-id $API_ID \
+            --route-key "ANY /{proxy+}" \
+            --target "integrations/$INTEGRATION_ID"
+
+      #Add permission to api gateway
+      - name: Add Permission to Api Gateway (Invoke Lambda)
+        run: |
+          aws lambda add-permission \
+            --function-name lambda-${{ github.sha }} \
+            --principal apigateway.amazonaws.com \
+            --statement-id "AllowAPIGatewayInvoke" \
+            --action "lambda:InvokeFunction" \
+            --source-arn "arn:aws:execute-api:${{ secrets.AWS_REGION }}:${{ secrets.AWS_ACCOUNT_ID }}:$API_ID/*/*/*"
+
+      - name: Deploy Api Gateway
+        run: |
+          aws apigatewayv2 create-deployment \
+            --api-id $API_ID \
+            --description "Deployment for version ${{ github.sha }}"
+            
+      - name: Create Api Gateway Stage
+        run: |
+          aws apigatewayv2 create-stage \
+            --api-id $API_ID \
+            --stage-name "prod" \
+            --deployment-id $(aws apigatewayv2 get-deployments --api-id $API_ID --query 'Items[0].DeploymentId' --output text)
+            
+      # Output API Gateway URL
+      - name: Output API Gateway URL
+        run: |
+          echo "API Gateway URL: https://${API_ID}.execute-api.${{ secrets.AWS_REGION }}.amazonaws.com/prod"
+          
+
+  
+      
+
+
+          
