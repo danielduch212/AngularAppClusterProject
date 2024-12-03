@@ -37,7 +37,7 @@ jobs:
       - name: Build docker image
         run: |
           docker build . \
-            --file ./AngularAppClusterProject/Dockerfile \
+            --file ./Dockerfile \
             --tag ${{ steps.login-ecr.outputs.registry }}/clusterproject/cluster-project-registry:front
 
       - name: Push docker image to amazon ECR
