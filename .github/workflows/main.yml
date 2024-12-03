@@ -36,11 +36,11 @@ jobs:
 
       - name: Build docker image
         run: |
-          docker build -t angular-app:latest .
-          docker tag angular-app:latest ${{ steps.login-ecr.outputs.registry }}/angular-app:latest
+          docker build . \
+            --file ./AngularAppClusterProject/Dockerfile \
+            --tag ${{ steps.login-ecr.outputs.registry }}/clusterproject/cluster-project-registry:front
 
       - name: Push docker image to amazon ECR
-        run: |
-          docker push ${{ steps.login-ecr.outputs.registry }}/angular-app:latest
+        run: docker push ${{ steps.login-ecr.outputs.registry }}/clusterproject/cluster-project-registry:front
 
         
