@@ -11,6 +11,6 @@ RUN npm run build --prod
 
 FROM nginx:alpine
 
-COPY --from=build /app/dist/angular-cluster-publish /usr/share/nginx/html
+COPY --from=build /app/dist/frontend-solution-front1 /usr/share/nginx/html
 
 CMD ["nginx", "-g", "daemon off;"]
