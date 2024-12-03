@@ -1,0 +1,46 @@
+name: Create docker image and push to ECR
+
+on:
+  workflow_dispatch:
+
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup Node js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build angular project
+        run: npm run build --prod
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build docker image
+        run: |
+          docker build -t angular-app:latest .
+          docker tag angular-app:latest ${{ steps.login-ecr.outputs.registry }}/angular-app:latest
+
+      - name: Push docker image to amazon ECR
+        run: |
+          docker push ${{ steps.login-ecr.outputs.registry }}/angular-app:latest
+
+        
