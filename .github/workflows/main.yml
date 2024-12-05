@@ -38,9 +38,9 @@ jobs:
         run: |
           docker build . \
             --file ./Dockerfile \
-            --tag ${{ steps.login-ecr.outputs.registry }}/clusterproject/cluster-project-registry:front
+            --tag ${{ steps.login-ecr.outputs.registry }}/cluster-project-repository:front
 
       - name: Push docker image to amazon ECR
-        run: docker push ${{ steps.login-ecr.outputs.registry }}/clusterproject/cluster-project-registry:front
+        run: docker push ${{ steps.login-ecr.outputs.registry }}/cluster-project-repository:front
 
         
